@@ -1,7 +1,6 @@
 package bridge
 
 import (
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"net"
@@ -24,6 +23,7 @@ import (
 	"github.com/docker/libnetwork/osl"
 	"github.com/docker/libnetwork/portmapper"
 	"github.com/docker/libnetwork/types"
+	"github.com/pkg/errors"
 	"github.com/vishvananda/netlink"
 )
 
@@ -643,11 +643,19 @@ func (d *driver) createNetwork(config *networkConfiguration) error {
 	}
 
 	// Create and set network handler in driver
+	var pmOpts []portmapper.CreateOption
+	if d.config.EnableUserlandProxy {
+		pmOpts = append(pmOpts, portmapper.WithUserlandProxy(d.config.UserlandProxyPath))
+	}
+	pm, err := portmapper.New(pmOpts...)
+	if err != nil {
+		return errors.Wrap(err, "error creating portmapper")
+	}
 	network := &bridgeNetwork{
 		id:         config.ID,
 		endpoints:  make(map[string]*bridgeEndpoint),
 		config:     config,
-		portMapper: portmapper.New(d.config.UserlandProxyPath),
+		portMapper: pm,
 		driver:     d,
 	}
 

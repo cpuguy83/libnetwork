@@ -1,12 +1,12 @@
 package portmapper
 
 import (
-	"net"
+	"os"
 	"os/exec"
-	"strconv"
+	"syscall"
 )
 
-func newProxyCommand(proto string, hostIP net.IP, hostPort int, containerIP net.IP, containerPort int, proxyPath string) (userlandProxy, error) {
+func newProxyCommand(proxyPath, sockPath string) (userlandProxy, error) {
 	path := proxyPath
 	if proxyPath == "" {
 		cmd, err := exec.LookPath(userlandProxyCommandName)
@@ -15,20 +15,15 @@ func newProxyCommand(proto string, hostIP net.IP, hostPort int, containerIP net.
 		}
 		path = cmd
 	}
-
-	args := []string{
-		path,
-		"-proto", proto,
-		"-host-ip", hostIP.String(),
-		"-host-port", strconv.Itoa(hostPort),
-		"-container-ip", containerIP.String(),
-		"-container-port", strconv.Itoa(containerPort),
-	}
+	syscall.Unlink(sockPath)
 
 	return &proxyCommand{
+		sockPath: sockPath,
 		cmd: &exec.Cmd{
-			Path: path,
-			Args: args,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+			Path:   path,
+			Args:   []string{path, sockPath},
 		},
 	}, nil
 }

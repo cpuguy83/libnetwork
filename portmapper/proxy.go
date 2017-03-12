@@ -1,13 +1,18 @@
 package portmapper
 
 import (
+	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/docker/libnetwork/cmd/proxy/rpc"
+	"github.com/pkg/errors"
+
+	"google.golang.org/grpc"
 )
 
 const userlandProxyCommandName = "docker-proxy"
@@ -17,58 +22,97 @@ type userlandProxy interface {
 	Stop() error
 }
 
+type proxyMapping struct {
+	proto        string
+	frontendIP   net.IP
+	frontendPort int
+	backendIP    net.IP
+	backendPort  int
+	client       rpc.ProxyClient
+}
+
+func newProxy(client rpc.ProxyClient, proto string, frontendIP net.IP, frontendPort int, backendIP net.IP, backendPort int) userlandProxy {
+	m := proxyMapping{
+		proto:        proto,
+		frontendIP:   frontendIP,
+		frontendPort: frontendPort,
+		backendIP:    backendIP,
+		backendPort:  backendPort,
+		client:       client,
+	}
+	return m
+}
+
+func (m proxyMapping) toProxySpec() *rpc.ProxySpec {
+	return &rpc.ProxySpec{
+		Protocol: m.proto,
+		Frontend: &rpc.ProxySpec_HostSpec{
+			Addr: m.frontendIP.String(),
+			Port: uint32(m.frontendPort),
+		},
+		Backend: &rpc.ProxySpec_HostSpec{
+			Addr: m.backendIP.String(),
+			Port: uint32(m.backendPort),
+		},
+	}
+}
+
+func (m proxyMapping) Start() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := m.client.StartProxy(ctx, &rpc.StartProxyRequest{
+		Spec: m.toProxySpec(),
+	})
+	return errors.Wrap(err, "error starting proxy")
+}
+
+func (m proxyMapping) Stop() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, err := m.client.StopProxy(ctx, &rpc.StopProxyRequest{
+		Spec: m.toProxySpec(),
+	})
+	return errors.Wrap(err, "error starting proxy")
+}
+
 // proxyCommand wraps an exec.Cmd to run the userland TCP and UDP
 // proxies as separate processes.
 type proxyCommand struct {
-	cmd *exec.Cmd
+	cmd      *exec.Cmd
+	sockPath string
+	conn     *grpc.ClientConn
+	client   rpc.ProxyClient
 }
 
-func (p *proxyCommand) Start() error {
-	r, w, err := os.Pipe()
-	if err != nil {
-		return fmt.Errorf("proxy unable to open os.Pipe %s", err)
-	}
-	defer r.Close()
-	p.cmd.ExtraFiles = []*os.File{w}
+func (p *proxyCommand) Run() error {
+	var err error
+
 	if err := p.cmd.Start(); err != nil {
-		return err
+		return errors.Wrap(err, "error starting docker-proxy")
 	}
-	w.Close()
 
-	errchan := make(chan error, 1)
-	go func() {
-		buf := make([]byte, 2)
-		r.Read(buf)
+	p.conn, err = grpc.Dial(p.sockPath, grpc.WithBlock(), grpc.WithTimeout(16*time.Second), grpc.WithInsecure(), grpc.WithDialer(func(addr string, timeout time.Duration) (net.Conn, error) {
+		return net.DialTimeout("unix", addr, timeout)
+	}))
 
-		if string(buf) != "0\n" {
-			errStr, err := ioutil.ReadAll(r)
-			if err != nil {
-				errchan <- fmt.Errorf("Error reading exit status from userland proxy: %v", err)
-				return
-			}
-
-			errchan <- fmt.Errorf("Error starting userland proxy: %s", errStr)
-			return
-		}
-		errchan <- nil
-	}()
-
-	select {
-	case err := <-errchan:
-		return err
-	case <-time.After(16 * time.Second):
-		return fmt.Errorf("Timed out proxy starting the userland proxy")
+	if err != nil {
+		return errors.Wrap(err, "error connecting to socket")
 	}
+
+	p.client = rpc.NewProxyClient(p.conn)
+	return nil
 }
 
 func (p *proxyCommand) Stop() error {
+	p.conn.Close()
 	if p.cmd.Process != nil {
 		if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
 			return err
 		}
 		return p.cmd.Wait()
 	}
-	return nil
+	err := os.Remove(p.sockPath)
+	return errors.Wrap(err, "error cleaning up docker-proxy socket")
 }
 
 // dummyProxy just listen on some port, it is needed to prevent accidental

@@ -4,7 +4,6 @@ package bridge
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -23,6 +22,7 @@ import (
 	"github.com/docker/libnetwork/options"
 	"github.com/docker/libnetwork/portmapper"
 	"github.com/docker/libnetwork/types"
+	"github.com/pkg/errors"
 )
 
 const (
@@ -520,11 +520,19 @@ func (d *driver) createNetwork(config *networkConfiguration) error {
 	}
 
 	// Create and set network handler in driver
+	var pmOpts []portmapper.CreateOption
+	if d.config.EnableUserlandProxy {
+		pmOpts = append(pmOpts, portmapper.WithUserlandProxy(d.config.UserlandProxyPath))
+	}
+	pm, err := portmapper.New(pmOpts...)
+	if err != nil {
+		return errors.Wrap(err, "error creating portmapper")
+	}
 	network := &bridgeNetwork{
 		id:         config.ID,
 		endpoints:  make(map[string]*bridgeEndpoint),
 		config:     config,
-		portMapper: portmapper.New(""),
+		portMapper: pm,
 		driver:     d,
 	}
 

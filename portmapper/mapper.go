@@ -1,14 +1,16 @@
 package portmapper
 
 import (
-	"errors"
 	"fmt"
+	"io/ioutil"
 	"net"
+	"os"
 	"sync"
 
 	"github.com/Sirupsen/logrus"
 	"github.com/docker/libnetwork/iptables"
 	"github.com/docker/libnetwork/portallocator"
+	"github.com/pkg/errors"
 )
 
 type mapping struct {
@@ -17,8 +19,6 @@ type mapping struct {
 	host          net.Addr
 	container     net.Addr
 }
-
-var newProxy = newProxyCommand
 
 var (
 	// ErrUnknownBackendAddressType refers to an unknown container or unsupported address type
@@ -38,23 +38,65 @@ type PortMapper struct {
 	currentMappings map[string]*mapping
 	lock            sync.Mutex
 
-	proxyPath string
+	proxyPath           string
+	enableUserlandProxy bool
+
+	proxyCmd *proxyCommand
 
 	Allocator *portallocator.PortAllocator
 }
 
-// New returns a new instance of PortMapper
-func New(proxyPath string) *PortMapper {
-	return NewWithPortAllocator(portallocator.Get(), proxyPath)
+// CreateOption represents functional options passed to the PortMapper initializer.
+type CreateOption func(*PortMapper) error
+
+// WithUserlandProxy is a functional option passed to the PortMapper initializer
+// which enables the userland proxy.
+func WithUserlandProxy(proxyPath string) CreateOption {
+	return func(pm *PortMapper) error {
+		f, err := ioutil.TempFile("", "docker-proxy")
+		if err != nil {
+			return errors.Wrap(err, "error creating proxy socket")
+		}
+		stat, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		f.Chmod(stat.Mode() & os.ModeSocket)
+		proxyCmd, err := newProxyCommand(proxyPath, f.Name())
+		f.Close()
+		if err == nil {
+			err = proxyCmd.Run()
+		}
+
+		pm.proxyCmd = proxyCmd
+		return errors.Wrap(err, "error setting up userland proxy option")
+	}
 }
 
-// NewWithPortAllocator returns a new instance of PortMapper which will use the specified PortAllocator
-func NewWithPortAllocator(allocator *portallocator.PortAllocator, proxyPath string) *PortMapper {
-	return &PortMapper{
-		currentMappings: make(map[string]*mapping),
-		Allocator:       allocator,
-		proxyPath:       proxyPath,
+// WithPortAllocator is a functional option passed to the PortMapper initializer.
+// It allows passing in a custom PortAllocator rather than using the default.
+func WithPortAllocator(pa *portallocator.PortAllocator) CreateOption {
+	return func(pm *PortMapper) error {
+		pm.Allocator = pa
+		return nil
 	}
+}
+
+// New returns a new instance of PortMapper
+func New(opts ...CreateOption) (*PortMapper, error) {
+	pm := &PortMapper{
+		currentMappings: make(map[string]*mapping),
+	}
+	for _, o := range opts {
+		if err := o(pm); err != nil {
+			return nil, err
+		}
+	}
+
+	if pm.Allocator == nil {
+		pm.Allocator = portallocator.Get()
+	}
+	return pm, nil
 }
 
 // SetIptablesChain sets the specified chain into portmapper
@@ -79,6 +121,13 @@ func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart,
 		allocatedHostPort int
 	)
 
+	// release the allocated port on any further error during return.
+	defer func() {
+		if err != nil {
+			pm.Allocator.ReleasePort(hostIP, proto, allocatedHostPort)
+		}
+	}()
+
 	switch container.(type) {
 	case *net.TCPAddr:
 		proto = "tcp"
@@ -92,8 +141,8 @@ func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart,
 			container: container,
 		}
 
-		if useProxy {
-			m.userlandProxy, err = newProxy(proto, hostIP, allocatedHostPort, container.(*net.TCPAddr).IP, container.(*net.TCPAddr).Port, pm.proxyPath)
+		if pm.proxyCmd != nil {
+			m.userlandProxy = newProxy(pm.proxyCmd.client, proto, hostIP, allocatedHostPort, container.(*net.TCPAddr).IP, container.(*net.TCPAddr).Port)
 			if err != nil {
 				return nil, err
 			}
@@ -112,24 +161,14 @@ func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart,
 			container: container,
 		}
 
-		if useProxy {
-			m.userlandProxy, err = newProxy(proto, hostIP, allocatedHostPort, container.(*net.UDPAddr).IP, container.(*net.UDPAddr).Port, pm.proxyPath)
-			if err != nil {
-				return nil, err
-			}
+		if pm.proxyCmd != nil {
+			m.userlandProxy = newProxy(pm.proxyCmd.client, proto, hostIP, allocatedHostPort, container.(*net.UDPAddr).IP, container.(*net.UDPAddr).Port)
 		} else {
 			m.userlandProxy = newDummyProxy(proto, hostIP, allocatedHostPort)
 		}
 	default:
 		return nil, ErrUnknownBackendAddressType
 	}
-
-	// release the allocated port on any further error during return.
-	defer func() {
-		if err != nil {
-			pm.Allocator.ReleasePort(hostIP, proto, allocatedHostPort)
-		}
-	}()
 
 	key := getKey(m.host)
 	if _, exists := pm.currentMappings[key]; exists {

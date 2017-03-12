@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+
+// Proxy is a grpc service which creates and stops tcp/udp proxies
+service Proxy {
+	// Start starts up a new proxy.
+	rpc StartProxy(StartProxyRequest) returns(StartProxyResponse) {}
+	// Stop stops an existing proxy.
+	rpc StopProxy(StopProxyRequest) returns(StopProxyResponse) {}
+}
+
+// StartProxyRequest is passed to the proxy service's Start endpoint.
+message StartProxyRequest {
+	ProxySpec spec = 1;
+}
+
+// StartProxyResponse is returned by the proxy service's Start endpoint.
+message StartProxyResponse{
+}
+
+// StopProxyRequest is passed to the proxy service's Stop endpoint.
+message StopProxyRequest {
+	ProxySpec spec = 1;
+}
+
+// StopProxyResponse is returned by the proxy service's Stop endpoint.
+message StopProxyResponse {
+}
+
+// ProxySpec defines the spec for creating a proxy.
+message ProxySpec {
+	// The protocol to proxy over (TCP or UDP).
+	string protocol = 1; 
+
+	// Hostspec is an address and port definition.
+	// It is used to define a frontend or backend proxy definition.
+	message HostSpec {
+		string addr = 1;
+		uint32 port = 2;
+	}
+
+	// Frontend is the frontend addr/port to proxy requests from.
+	HostSpec frontend = 2;
+	// Backend is the backend addr/port to proxy requests to.
+	HostSpec backend = 3;
+}

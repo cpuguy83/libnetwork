@@ -27,6 +27,7 @@ _testmain.go
 *.test
 *.prof
 cmd/dnet/dnet
+cmd/proxy/proxy
 
 # Coverage
 *.tmp

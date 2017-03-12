@@ -1,13 +1,12 @@
 package portmapper
 
 import (
-	"net"
+	"os"
 	"os/exec"
-	"strconv"
 	"syscall"
 )
 
-func newProxyCommand(proto string, hostIP net.IP, hostPort int, containerIP net.IP, containerPort int, proxyPath string) (userlandProxy, error) {
+func newProxyCommand(proxyPath, sockPath string) (*proxyCommand, error) {
 	path := proxyPath
 	if proxyPath == "" {
 		cmd, err := exec.LookPath(userlandProxyCommandName)
@@ -16,20 +15,15 @@ func newProxyCommand(proto string, hostIP net.IP, hostPort int, containerIP net.
 		}
 		path = cmd
 	}
-
-	args := []string{
-		path,
-		"-proto", proto,
-		"-host-ip", hostIP.String(),
-		"-host-port", strconv.Itoa(hostPort),
-		"-container-ip", containerIP.String(),
-		"-container-port", strconv.Itoa(containerPort),
-	}
+	syscall.Unlink(sockPath)
 
 	return &proxyCommand{
+		sockPath: sockPath,
 		cmd: &exec.Cmd{
-			Path: path,
-			Args: args,
+			Path:   path,
+			Stdout: os.Stdout,
+			Stderr: os.Stderr,
+			Args:   []string{path, sockPath},
 			SysProcAttr: &syscall.SysProcAttr{
 				Pdeathsig: syscall.SIGTERM, // send a sigterm to the proxy if the daemon process dies
 			},
