@@ -2,9 +2,10 @@ package main
 
 import (
 	"io"
-	"log"
 	"net"
 	"sync"
+
+	"github.com/Sirupsen/logrus"
 )
 
 // TCPProxy is a proxy for TCP connections. It implements the Proxy interface to
@@ -21,11 +22,17 @@ func NewTCPProxy(frontendAddr, backendAddr *net.TCPAddr) (*TCPProxy, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	fa := listener.Addr().(*net.TCPAddr)
+	if frontendAddr.IP.IsUnspecified() {
+		fa = frontendAddr
+	}
+
 	// If the port in frontendAddr was 0 then ListenTCP will have a picked
 	// a port to listen on, hence the call to Addr to get that actual port:
 	return &TCPProxy{
 		listener:     listener,
-		frontendAddr: listener.Addr().(*net.TCPAddr),
+		frontendAddr: fa,
 		backendAddr:  backendAddr,
 	}, nil
 }
@@ -33,7 +40,9 @@ func NewTCPProxy(frontendAddr, backendAddr *net.TCPAddr) (*TCPProxy, error) {
 func (proxy *TCPProxy) clientLoop(client *net.TCPConn, quit chan bool) {
 	backend, err := net.DialTCP("tcp", nil, proxy.backendAddr)
 	if err != nil {
-		log.Printf("Can't forward traffic to backend tcp/%v: %s\n", proxy.backendAddr, err)
+		if !isClosedError(err) {
+			logrus.WithError(err).Errorf("Can't forward traffic to backend tcp/%v", proxy.backendAddr)
+		}
 		client.Close()
 		return
 	}
@@ -72,7 +81,9 @@ func (proxy *TCPProxy) Run() {
 	for {
 		client, err := proxy.listener.Accept()
 		if err != nil {
-			log.Printf("Stopping proxy on tcp/%v for tcp/%v (%s)", proxy.frontendAddr, proxy.backendAddr, err)
+			if !isClosedError(err) {
+				logrus.WithError(err).Error("Stopping proxy on tcp/%v for tcp/%v (%s)", proxy.frontendAddr, proxy.backendAddr)
+			}
 			return
 		}
 		go proxy.clientLoop(client.(*net.TCPConn), quit)

@@ -48,7 +48,7 @@ type PortMapper struct {
 type CreateOption func(*PortMapper)
 
 // WithFullProxy enables the full proxying functionality
-// If not used, then only a dummy proxy just occupises the port on the frontend
+// If not used, then only a dummy proxy which just occupies the port on the frontend
 // is created.
 func WithFullProxy(pm *PortMapper) {
 	pm.enableUserlandProxy = true

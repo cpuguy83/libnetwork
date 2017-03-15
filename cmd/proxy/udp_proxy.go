@@ -59,9 +59,15 @@ func NewUDPProxy(frontendAddr, backendAddr *net.UDPAddr) (*UDPProxy, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	fa := listener.LocalAddr().(*net.UDPAddr)
+	if frontendAddr.IP.IsUnspecified() {
+		fa = frontendAddr
+	}
+
 	return &UDPProxy{
 		listener:       listener,
-		frontendAddr:   listener.LocalAddr().(*net.UDPAddr),
+		frontendAddr:   fa,
 		backendAddr:    backendAddr,
 		connTrackTable: make(connTrackMap),
 	}, nil

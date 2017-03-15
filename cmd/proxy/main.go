@@ -2,48 +2,47 @@ package main
 
 import (
 	"flag"
-	"net"
+	"fmt"
 	"os"
-	"os/signal"
-	"syscall"
-
-	"google.golang.org/grpc"
-
-	"github.com/Sirupsen/logrus"
-	"github.com/docker/libnetwork/cmd/proxy/rpc"
 )
 
 func main() {
-	logLevel := flag.String("log-level", "info", "set the log level for logging output")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage of %s:\n", os.Args[0])
+		flag.PrintDefaults()
+
+		fmt.Fprintln(os.Stderr)
+		fmt.Fprintln(os.Stderr, "COMMANDS:")
+		fmt.Fprintln(os.Stderr, "\tserve - run the proxy daemon")
+		fmt.Fprintln(os.Stderr, "\tdebug - run various debug commands")
+		fmt.Fprintln(os.Stderr)
+	}
+
 	flag.Parse()
-
-	level, err := logrus.ParseLevel(*logLevel)
-	if err != nil {
-		logrus.Fatal(err)
-	}
-	logrus.SetLevel(level)
-
-	l, err := net.Listen("unix", os.Args[1])
-	if err != nil {
-		logrus.Fatalf("error starting grpc listener: %v", err)
-	}
-
-	srv := &server{
-		rpc: grpc.NewServer(grpc.UnaryInterceptor(middleware)),
-	}
-
-	rpc.RegisterProxyServer(srv.rpc, srv)
-	go handleStopSignals(srv)
-
-	srv.Serve(l)
+	runCmd()
 }
 
-func handleStopSignals(srv *server) {
-	s := make(chan os.Signal, 10)
-	signal.Notify(s, os.Interrupt, syscall.SIGTERM)
-
-	for range s {
-		srv.shutdown()
+func runCmd() {
+	args := flag.Args()
+	if len(args) == 0 {
+		flag.Usage()
+		fmt.Fprintln(os.Stderr, "Must provide a command to run")
+		return
 	}
-	os.Exit(0)
+
+	cmd := args[0]
+	var cmdArgs []string
+	if len(args) > 1 {
+		cmdArgs = args[1:]
+	}
+
+	switch cmd {
+	case "debug":
+		runDebug(cmdArgs)
+	case "serve":
+		runSrv(cmdArgs)
+	default:
+		errorOut(fmt.Sprintf("Unknown command: %s", cmd))
+		flag.Usage()
+	}
 }

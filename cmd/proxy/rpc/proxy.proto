@@ -7,6 +7,8 @@ service Proxy {
 	rpc StartProxy(StartProxyRequest) returns(StartProxyResponse) {}
 	// Stop stops an existing proxy.
 	rpc StopProxy(StopProxyRequest) returns(StopProxyResponse) {}
+	// List lists all the running proxies
+	rpc List(ListRequest) returns(ListResponse) {}
 }
 
 // StartProxyRequest is passed to the proxy service's Start endpoint.
@@ -27,10 +29,19 @@ message StopProxyRequest {
 message StopProxyResponse {
 }
 
+// ListRequest is the request passed to the proxy service's List endpoint.
+message ListRequest{
+}
+
+// ListResponse is returned by the proxy service's List endpoint.
+message ListResponse {
+	repeated ProxySpec proxies = 1;
+}
+
 // ProxySpec defines the spec for creating a proxy.
 message ProxySpec {
 	// The protocol to proxy over (TCP or UDP).
-	string protocol = 1; 
+	string protocol = 1;
 
 	// Hostspec is an address and port definition.
 	// It is used to define a frontend or backend proxy definition.
