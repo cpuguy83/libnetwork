@@ -644,9 +644,12 @@ func (d *driver) createNetwork(config *networkConfiguration) error {
 
 	// Create and set network handler in driver
 	var pmOpts []portmapper.CreateOption
+
+	pmOpts = append(pmOpts, portmapper.WithProxyPath(d.config.UserlandProxyPath))
 	if d.config.EnableUserlandProxy {
-		pmOpts = append(pmOpts, portmapper.WithUserlandProxy(d.config.UserlandProxyPath))
+		pmOpts = append(pmOpts, portmapper.WithFullProxy)
 	}
+
 	pm, err := portmapper.New(pmOpts...)
 	if err != nil {
 		return errors.Wrap(err, "error creating portmapper")

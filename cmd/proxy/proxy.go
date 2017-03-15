@@ -25,6 +25,9 @@ type Proxy interface {
 
 // NewProxy creates a Proxy according to the specified frontendAddr and backendAddr.
 func NewProxy(frontendAddr, backendAddr net.Addr) (Proxy, error) {
+	if backendAddr == nil {
+		return NewDummyProxy(frontendAddr)
+	}
 	switch frontendAddr.(type) {
 	case *net.UDPAddr:
 		return NewUDPProxy(frontendAddr.(*net.UDPAddr), backendAddr.(*net.UDPAddr))

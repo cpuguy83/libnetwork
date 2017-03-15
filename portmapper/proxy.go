@@ -2,8 +2,7 @@ package portmapper
 
 import (
 	"context"
-	"fmt"
-	"io"
+	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -31,30 +30,39 @@ type proxyMapping struct {
 	client       rpc.ProxyClient
 }
 
-func newProxy(client rpc.ProxyClient, proto string, frontendIP net.IP, frontendPort int, backendIP net.IP, backendPort int) userlandProxy {
+func newProxy(pm *PortMapper, proto string, frontendIP net.IP, frontendPort int, backendIP net.IP, backendPort int) userlandProxy {
 	m := proxyMapping{
 		proto:        proto,
 		frontendIP:   frontendIP,
 		frontendPort: frontendPort,
 		backendIP:    backendIP,
 		backendPort:  backendPort,
-		client:       client,
+		client:       pm.proxyCmd.client,
 	}
+	if !pm.enableUserlandProxy {
+		m.backendIP = nil
+		m.backendPort = 0
+	}
+
 	return m
 }
 
 func (m proxyMapping) toProxySpec() *rpc.ProxySpec {
-	return &rpc.ProxySpec{
+	spec := &rpc.ProxySpec{
 		Protocol: m.proto,
 		Frontend: &rpc.ProxySpec_HostSpec{
 			Addr: m.frontendIP.String(),
 			Port: uint32(m.frontendPort),
 		},
-		Backend: &rpc.ProxySpec_HostSpec{
+	}
+
+	if m.backendIP != nil {
+		spec.Backend = &rpc.ProxySpec_HostSpec{
 			Addr: m.backendIP.String(),
 			Port: uint32(m.backendPort),
-		},
+		}
 	}
+	return spec
 }
 
 func (m proxyMapping) Start() error {
@@ -115,49 +123,16 @@ func (p *proxyCommand) Stop() error {
 	return errors.Wrap(err, "error cleaning up docker-proxy socket")
 }
 
-// dummyProxy just listen on some port, it is needed to prevent accidental
-// port allocations on bound port, because without userland proxy we using
-// iptables rules and not net.Listen
-type dummyProxy struct {
-	listener io.Closer
-	addr     net.Addr
-}
-
-func newDummyProxy(proto string, hostIP net.IP, hostPort int) userlandProxy {
-	switch proto {
-	case "tcp":
-		addr := &net.TCPAddr{IP: hostIP, Port: hostPort}
-		return &dummyProxy{addr: addr}
-	case "udp":
-		addr := &net.UDPAddr{IP: hostIP, Port: hostPort}
-		return &dummyProxy{addr: addr}
+func setupUserlandProxy(proxyPath string) (*proxyCommand, error) {
+	f, err := ioutil.TempFile("", "docker-proxy")
+	if err != nil {
+		return nil, errors.Wrap(err, "error creating proxy socket")
 	}
-	return nil
-}
-
-func (p *dummyProxy) Start() error {
-	switch addr := p.addr.(type) {
-	case *net.TCPAddr:
-		l, err := net.ListenTCP("tcp", addr)
-		if err != nil {
-			return err
-		}
-		p.listener = l
-	case *net.UDPAddr:
-		l, err := net.ListenUDP("udp", addr)
-		if err != nil {
-			return err
-		}
-		p.listener = l
-	default:
-		return fmt.Errorf("Unknown addr type: %T", p.addr)
+	proxyCmd, err := newProxyCommand(proxyPath, f.Name())
+	f.Close()
+	if err == nil {
+		err = proxyCmd.Run()
 	}
-	return nil
-}
 
-func (p *dummyProxy) Stop() error {
-	if p.listener != nil {
-		return p.listener.Close()
-	}
-	return nil
+	return proxyCmd, errors.Wrap(err, "error setting up userland proxy option")
 }

@@ -2,9 +2,7 @@ package portmapper
 
 import (
 	"fmt"
-	"io/ioutil"
 	"net"
-	"os"
 	"sync"
 
 	"github.com/Sirupsen/logrus"
@@ -47,38 +45,27 @@ type PortMapper struct {
 }
 
 // CreateOption represents functional options passed to the PortMapper initializer.
-type CreateOption func(*PortMapper) error
+type CreateOption func(*PortMapper)
 
-// WithUserlandProxy is a functional option passed to the PortMapper initializer
-// which enables the userland proxy.
-func WithUserlandProxy(proxyPath string) CreateOption {
-	return func(pm *PortMapper) error {
-		f, err := ioutil.TempFile("", "docker-proxy")
-		if err != nil {
-			return errors.Wrap(err, "error creating proxy socket")
-		}
-		stat, err := f.Stat()
-		if err != nil {
-			return err
-		}
-		f.Chmod(stat.Mode() & os.ModeSocket)
-		proxyCmd, err := newProxyCommand(proxyPath, f.Name())
-		f.Close()
-		if err == nil {
-			err = proxyCmd.Run()
-		}
+// WithFullProxy enables the full proxying functionality
+// If not used, then only a dummy proxy just occupises the port on the frontend
+// is created.
+func WithFullProxy(pm *PortMapper) {
+	pm.enableUserlandProxy = true
+}
 
-		pm.proxyCmd = proxyCmd
-		return errors.Wrap(err, "error setting up userland proxy option")
+// WithProxyPath sets the path to the proxy binary
+func WithProxyPath(p string) CreateOption {
+	return func(pm *PortMapper) {
+		pm.proxyPath = p
 	}
 }
 
 // WithPortAllocator is a functional option passed to the PortMapper initializer.
 // It allows passing in a custom PortAllocator rather than using the default.
 func WithPortAllocator(pa *portallocator.PortAllocator) CreateOption {
-	return func(pm *PortMapper) error {
+	return func(pm *PortMapper) {
 		pm.Allocator = pa
-		return nil
 	}
 }
 
@@ -88,15 +75,16 @@ func New(opts ...CreateOption) (*PortMapper, error) {
 		currentMappings: make(map[string]*mapping),
 	}
 	for _, o := range opts {
-		if err := o(pm); err != nil {
-			return nil, err
-		}
+		o(pm)
 	}
 
 	if pm.Allocator == nil {
 		pm.Allocator = portallocator.Get()
 	}
-	return pm, nil
+
+	var err error
+	pm.proxyCmd, err = setupUserlandProxy(pm.proxyPath)
+	return pm, err
 }
 
 // SetIptablesChain sets the specified chain into portmapper
@@ -106,12 +94,12 @@ func (pm *PortMapper) SetIptablesChain(c *iptables.ChainInfo, bridgeName string)
 }
 
 // Map maps the specified container transport address to the host's network address and transport port
-func (pm *PortMapper) Map(container net.Addr, hostIP net.IP, hostPort int, useProxy bool) (host net.Addr, err error) {
-	return pm.MapRange(container, hostIP, hostPort, hostPort, useProxy)
+func (pm *PortMapper) Map(container net.Addr, hostIP net.IP, hostPort int) (host net.Addr, err error) {
+	return pm.MapRange(container, hostIP, hostPort, hostPort)
 }
 
 // MapRange maps the specified container transport address to the host's network address and transport port range
-func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart, hostPortEnd int, useProxy bool) (host net.Addr, err error) {
+func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart, hostPortEnd int) (host net.Addr, err error) {
 	pm.lock.Lock()
 	defer pm.lock.Unlock()
 
@@ -141,13 +129,9 @@ func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart,
 			container: container,
 		}
 
-		if pm.proxyCmd != nil {
-			m.userlandProxy = newProxy(pm.proxyCmd.client, proto, hostIP, allocatedHostPort, container.(*net.TCPAddr).IP, container.(*net.TCPAddr).Port)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			m.userlandProxy = newDummyProxy(proto, hostIP, allocatedHostPort)
+		m.userlandProxy = newProxy(pm, proto, hostIP, allocatedHostPort, container.(*net.TCPAddr).IP, container.(*net.TCPAddr).Port)
+		if err != nil {
+			return nil, err
 		}
 	case *net.UDPAddr:
 		proto = "udp"
@@ -160,12 +144,7 @@ func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart,
 			host:      &net.UDPAddr{IP: hostIP, Port: allocatedHostPort},
 			container: container,
 		}
-
-		if pm.proxyCmd != nil {
-			m.userlandProxy = newProxy(pm.proxyCmd.client, proto, hostIP, allocatedHostPort, container.(*net.UDPAddr).IP, container.(*net.UDPAddr).Port)
-		} else {
-			m.userlandProxy = newDummyProxy(proto, hostIP, allocatedHostPort)
-		}
+		m.userlandProxy = newProxy(pm, proto, hostIP, allocatedHostPort, container.(*net.UDPAddr).IP, container.(*net.UDPAddr).Port)
 	default:
 		return nil, ErrUnknownBackendAddressType
 	}
