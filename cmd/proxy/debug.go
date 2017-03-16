@@ -14,9 +14,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"google.golang.org/grpc"
+	"github.com/docker/libnetwork/api/proxy"
 
-	"github.com/docker/libnetwork/cmd/proxy/rpc"
+	"google.golang.org/grpc"
 )
 
 func runDebug(args []string) {
@@ -89,7 +89,7 @@ func errorOut(msg string) {
 func runList(sock string, args []string) {
 	conn := makeClient(sock)
 	defer conn.Close()
-	client := rpc.NewProxyClient(conn)
+	client := proxy.NewProxyClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -106,7 +106,7 @@ func runList(sock string, args []string) {
 		if p.Backend != nil {
 			backend = net.JoinHostPort(p.Backend.Addr, strconv.Itoa(int(p.Backend.Port)))
 		}
-		fmt.Fprintf(tw, "%s\t%s\n", rpc.Key(p), backend)
+		fmt.Fprintf(tw, "%s\t%s\n", proxy.Key(p), backend)
 	}
 	tw.Flush()
 	io.Copy(os.Stdout, buf)
@@ -146,21 +146,21 @@ func runStart(sock string, args []string) {
 
 	conn := makeClient(sock)
 	defer conn.Close()
-	client := rpc.NewProxyClient(conn)
+	client := proxy.NewProxyClient(conn)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	req := &rpc.StartProxyRequest{
-		Spec: &rpc.ProxySpec{
+	req := &proxy.StartProxyRequest{
+		Spec: &proxy.ProxySpec{
 			Protocol: *proto,
-			Frontend: &rpc.ProxySpec_HostSpec{
+			Frontend: &proxy.ProxySpec_EndpointSpec{
 				Addr: fa,
 				Port: uint32(fp),
 			},
 		},
 	}
 	if ba != "" {
-		req.Spec.Backend = &rpc.ProxySpec_HostSpec{
+		req.Spec.Backend = &proxy.ProxySpec_EndpointSpec{
 			Addr: ba,
 			Port: uint32(bp),
 		}
@@ -188,7 +188,7 @@ func splitAddrString(s string) (addr string, port int, proto string, err error) 
 func runStop(sock string, args []string) {
 	conn := makeClient(sock)
 	defer conn.Close()
-	client := rpc.NewProxyClient(conn)
+	client := proxy.NewProxyClient(conn)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -202,19 +202,21 @@ func runStop(sock string, args []string) {
 		wg.Add(1)
 		go func(arg string) {
 			defer wg.Done()
-			_, err := client.StopProxy(ctx, &rpc.StopProxyRequest{
-				Spec: &rpc.ProxySpec{
+			req := &proxy.StopProxyRequest{
+				Spec: &proxy.ProxySpec{
 					Protocol: proto,
-					Frontend: &rpc.ProxySpec_HostSpec{
+					Frontend: &proxy.ProxySpec_EndpointSpec{
 						Addr: addr,
 						Port: uint32(port),
 					},
 				},
-			})
+			}
+			_, err := client.StopProxy(ctx, req)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "error stopping proxy %s: %v\n", arg, err)
+				fmt.Fprintf(os.Stderr, "Error stopping proxy %s: %v\n", arg, err)
 				return
 			}
+			fmt.Println(req.Spec)
 			fmt.Fprintln(os.Stdout, arg)
 		}(arg)
 	}

@@ -8,7 +8,7 @@ import (
 	"os/exec"
 	"time"
 
-	"github.com/docker/libnetwork/cmd/proxy/rpc"
+	"github.com/docker/libnetwork/api/proxy"
 	"github.com/pkg/errors"
 
 	"google.golang.org/grpc"
@@ -27,7 +27,7 @@ type proxyMapping struct {
 	frontendPort int
 	backendIP    net.IP
 	backendPort  int
-	client       rpc.ProxyClient
+	client       proxy.ProxyClient
 }
 
 func newProxy(pm *PortMapper, proto string, frontendIP net.IP, frontendPort int, backendIP net.IP, backendPort int) userlandProxy {
@@ -47,17 +47,17 @@ func newProxy(pm *PortMapper, proto string, frontendIP net.IP, frontendPort int,
 	return m
 }
 
-func (m proxyMapping) toProxySpec() *rpc.ProxySpec {
-	spec := &rpc.ProxySpec{
+func (m proxyMapping) toProxySpec() *proxy.ProxySpec {
+	spec := &proxy.ProxySpec{
 		Protocol: m.proto,
-		Frontend: &rpc.ProxySpec_HostSpec{
+		Frontend: &proxy.ProxySpec_EndpointSpec{
 			Addr: m.frontendIP.String(),
 			Port: uint32(m.frontendPort),
 		},
 	}
 
 	if m.backendIP != nil {
-		spec.Backend = &rpc.ProxySpec_HostSpec{
+		spec.Backend = &proxy.ProxySpec_EndpointSpec{
 			Addr: m.backendIP.String(),
 			Port: uint32(m.backendPort),
 		}
@@ -68,7 +68,7 @@ func (m proxyMapping) toProxySpec() *rpc.ProxySpec {
 func (m proxyMapping) Start() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := m.client.StartProxy(ctx, &rpc.StartProxyRequest{
+	_, err := m.client.StartProxy(ctx, &proxy.StartProxyRequest{
 		Spec: m.toProxySpec(),
 	})
 	return errors.Wrap(err, "error starting proxy")
@@ -77,7 +77,7 @@ func (m proxyMapping) Start() error {
 func (m proxyMapping) Stop() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := m.client.StopProxy(ctx, &rpc.StopProxyRequest{
+	_, err := m.client.StopProxy(ctx, &proxy.StopProxyRequest{
 		Spec: m.toProxySpec(),
 	})
 	return errors.Wrap(err, "error starting proxy")
@@ -89,7 +89,7 @@ type proxyCommand struct {
 	cmd      *exec.Cmd
 	sockPath string
 	conn     *grpc.ClientConn
-	client   rpc.ProxyClient
+	client   proxy.ProxyClient
 }
 
 func (p *proxyCommand) Run() error {
@@ -107,7 +107,7 @@ func (p *proxyCommand) Run() error {
 		return errors.Wrap(err, "error connecting to socket")
 	}
 
-	p.client = rpc.NewProxyClient(p.conn)
+	p.client = proxy.NewProxyClient(p.conn)
 	return nil
 }
 

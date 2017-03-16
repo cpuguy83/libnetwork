@@ -10,7 +10,7 @@ import (
 	"syscall"
 
 	"github.com/Sirupsen/logrus"
-	"github.com/docker/libnetwork/cmd/proxy/rpc"
+	"github.com/docker/libnetwork/api/proxy"
 
 	pprofapi "github.com/cpuguy83/go-grpc-pprof/api"
 	pprofgrpc "github.com/cpuguy83/go-grpc-pprof/server"
@@ -46,7 +46,7 @@ func runSrv(args []string) {
 		proxies: make(map[string]Proxy),
 	}
 
-	rpc.RegisterProxyServer(grpcsrv, srv)
+	proxy.RegisterProxyServer(grpcsrv, srv)
 	pprofapi.RegisterPProfServiceServer(grpcsrv, pprofgrpc.NewServer())
 
 	go func() {
@@ -90,19 +90,48 @@ func (s *server) shutdown() {
 	s.mu.Unlock()
 }
 
+func validateProxySpec(spec *proxy.ProxySpec) error {
+	switch spec.Protocol {
+	case "tcp", "udp":
+	default:
+		return errors.New("protocol not supported")
+	}
+
+	if spec.Frontend == nil {
+		return errors.New("must provide a frontend endpoint spec")
+	}
+
+	if spec.Frontend.Addr == "" {
+		return errors.New("cannot supply an empty frontend address")
+	}
+	if spec.Frontend.Port == 0 || spec.Frontend.Port > 65535 {
+		return errors.New("frontend port spec out of range")
+	}
+	if spec.Backend != nil {
+		if spec.Backend.Addr == "" {
+			return errors.New("cannot supply an empty backend address")
+		}
+		if spec.Backend.Port == 0 || spec.Backend.Port > 65535 {
+			return errors.New("backend port spec out of range")
+		}
+	}
+	return nil
+}
+
 // StartProxy implements the StartProxy() call for the grpc ProxyServer type defined in the imported rpc package.
 // It starts up a proxy for the spec defined in the request.
-func (s *server) StartProxy(ctx context.Context, req *rpc.StartProxyRequest) (*rpc.StartProxyResponse, error) {
-	frontend, backend, err := getProxyAddrs(req.Spec)
-	if err != nil {
-		return nil, err
+func (s *server) StartProxy(ctx context.Context, req *proxy.StartProxyRequest) (*proxy.StartProxyResponse, error) {
+	if err := validateProxySpec(req.Spec); err != nil {
+		return nil, grpc.Errorf(codes.InvalidArgument, "%v", err)
 	}
+
+	frontend, backend := getProxyAddrs(req.Spec)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.proxies[rpc.Key(req.Spec)]; exists {
-		return nil, grpc.Errorf(codes.FailedPrecondition, "proxy for %q already exists", rpc.Key(req.Spec))
+	if _, exists := s.proxies[proxy.Key(req.Spec)]; exists {
+		return nil, grpc.Errorf(codes.FailedPrecondition, "proxy for %q already exists", proxy.Key(req.Spec))
 	}
 
 	if req.Spec.Backend == nil {
@@ -117,15 +146,12 @@ func (s *server) StartProxy(ctx context.Context, req *rpc.StartProxyRequest) (*r
 	if p == nil {
 		panic("hmmm")
 	}
-	s.proxies[rpc.Key(req.Spec)] = p
+	s.proxies[proxy.Key(req.Spec)] = p
 	go p.Run()
-	return &rpc.StartProxyResponse{}, nil
+	return &proxy.StartProxyResponse{}, nil
 }
 
-func getProxyAddrs(spec *rpc.ProxySpec) (frontend, backend net.Addr, err error) {
-	if spec.Frontend == nil {
-		return nil, nil, errors.New("missing frontend spec")
-	}
+func getProxyAddrs(spec *proxy.ProxySpec) (frontend, backend net.Addr) {
 	switch spec.Protocol {
 	case "tcp":
 		frontend = &net.TCPAddr{IP: net.ParseIP(spec.Frontend.Addr), Port: int(spec.Frontend.Port)}
@@ -137,25 +163,23 @@ func getProxyAddrs(spec *rpc.ProxySpec) (frontend, backend net.Addr, err error) 
 		if spec.Backend != nil {
 			backend = &net.UDPAddr{IP: net.ParseIP(spec.Backend.Addr), Port: int(spec.Backend.Port)}
 		}
-	default:
-		return nil, nil, grpc.Errorf(codes.InvalidArgument, "unsupported proxy protocol: %s", spec.Protocol)
 	}
 	return
 }
 
 // StopProxy implements the StopProxy() call for the grpc ProxyServer type defined in the imported rpc package.
 // It shuts down the proxy for the spec defined in the request.
-func (s *server) StopProxy(ctx context.Context, req *rpc.StopProxyRequest) (*rpc.StopProxyResponse, error) {
+func (s *server) StopProxy(ctx context.Context, req *proxy.StopProxyRequest) (*proxy.StopProxyResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	p := s.proxies[rpc.Key(req.Spec)]
+	p := s.proxies[proxy.Key(req.Spec)]
 	if p != nil {
 		p.Close()
-		delete(s.proxies, rpc.Key(req.Spec))
+		delete(s.proxies, proxy.Key(req.Spec))
 	}
 
-	return &rpc.StopProxyResponse{}, nil
+	return &proxy.StopProxyResponse{}, nil
 }
 
 func splitAddr(a net.Addr) (ip net.IP, port int) {
@@ -174,18 +198,18 @@ func splitAddr(a net.Addr) (ip net.IP, port int) {
 	return ip, port
 }
 
-func proxyToSpec(p Proxy) *rpc.ProxySpec {
+func proxyToSpec(p Proxy) *proxy.ProxySpec {
 	frontIP, frontPort := splitAddr(p.FrontendAddr())
 	backIP, backPort := splitAddr(p.BackendAddr())
-	spec := &rpc.ProxySpec{
+	spec := &proxy.ProxySpec{
 		Protocol: p.FrontendAddr().Network(),
-		Frontend: &rpc.ProxySpec_HostSpec{
+		Frontend: &proxy.ProxySpec_EndpointSpec{
 			Addr: frontIP.String(),
 			Port: uint32(frontPort),
 		},
 	}
 	if backIP != nil {
-		spec.Backend = &rpc.ProxySpec_HostSpec{
+		spec.Backend = &proxy.ProxySpec_EndpointSpec{
 			Addr: backIP.String(),
 			Port: uint32(backPort),
 		}
@@ -195,13 +219,13 @@ func proxyToSpec(p Proxy) *rpc.ProxySpec {
 
 // List implements the List() call for the grpc ProxyServer type defined int he imported rpc package.
 // It lists all the currently running proxies.
-func (s *server) List(Ctx context.Context, req *rpc.ListRequest) (*rpc.ListResponse, error) {
+func (s *server) List(Ctx context.Context, req *proxy.ListRequest) (*proxy.ListResponse, error) {
 	s.mu.Lock()
 
-	ls := make([]*rpc.ProxySpec, 0, len(s.proxies))
+	ls := make([]*proxy.ProxySpec, 0, len(s.proxies))
 	for _, p := range s.proxies {
 		ls = append(ls, proxyToSpec(p))
 	}
 	s.mu.Unlock()
-	return &rpc.ListResponse{Proxies: ls}, nil
+	return &proxy.ListResponse{Proxies: ls}, nil
 }

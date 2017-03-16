@@ -45,13 +45,13 @@ message ProxySpec {
 
 	// Hostspec is an address and port definition.
 	// It is used to define a frontend or backend proxy definition.
-	message HostSpec {
+	message EndpointSpec {
 		string addr = 1;
 		uint32 port = 2;
 	}
 
 	// Frontend is the frontend addr/port to proxy requests from.
-	HostSpec frontend = 2;
+	EndpointSpec frontend = 2;
 	// Backend is the backend addr/port to proxy requests to.
-	HostSpec backend = 3;
+	EndpointSpec backend = 3;
 }
