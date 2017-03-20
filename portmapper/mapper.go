@@ -6,8 +6,10 @@ import (
 	"sync"
 
 	"github.com/Sirupsen/logrus"
+	"github.com/docker/libnetwork/api/proxy"
 	"github.com/docker/libnetwork/iptables"
 	"github.com/docker/libnetwork/portallocator"
+	"github.com/docker/libnetwork/types"
 	"github.com/pkg/errors"
 )
 
@@ -27,6 +29,8 @@ var (
 	ErrPortNotMapped = errors.New("port is not mapped")
 )
 
+const maxAllocatePortAttempts = 10
+
 // PortMapper manages the network address translation
 type PortMapper struct {
 	chain      *iptables.ChainInfo
@@ -36,28 +40,25 @@ type PortMapper struct {
 	currentMappings map[string]*mapping
 	lock            sync.Mutex
 
-	proxyPath           string
-	enableUserlandProxy bool
-
-	proxyCmd *proxyCommand
-
-	Allocator *portallocator.PortAllocator
+	proxyService proxy.ProxyClient
+	proxyBackend bool
+	Allocator    *portallocator.PortAllocator
 }
 
 // CreateOption represents functional options passed to the PortMapper initializer.
 type CreateOption func(*PortMapper)
 
-// WithFullProxy enables the full proxying functionality
-// If not used, then only a dummy proxy which just occupies the port on the frontend
-// is created.
-func WithFullProxy(pm *PortMapper) {
-	pm.enableUserlandProxy = true
+// WithFullProxy enables proxying to a backend rather than just occupying the port
+func WithFullProxy(enabled bool) CreateOption {
+	return func(pm *PortMapper) {
+		pm.proxyBackend = enabled
+	}
 }
 
-// WithProxyPath sets the path to the proxy binary
-func WithProxyPath(p string) CreateOption {
+// WithProxyService sets a custom proxy server to use
+func WithProxyService(p proxy.ProxyClient) CreateOption {
 	return func(pm *PortMapper) {
-		pm.proxyPath = p
+		pm.proxyService = p
 	}
 }
 
@@ -70,7 +71,7 @@ func WithPortAllocator(pa *portallocator.PortAllocator) CreateOption {
 }
 
 // New returns a new instance of PortMapper
-func New(opts ...CreateOption) (*PortMapper, error) {
+func New(opts ...CreateOption) *PortMapper {
 	pm := &PortMapper{
 		currentMappings: make(map[string]*mapping),
 	}
@@ -82,9 +83,7 @@ func New(opts ...CreateOption) (*PortMapper, error) {
 		pm.Allocator = portallocator.Get()
 	}
 
-	var err error
-	pm.proxyCmd, err = setupUserlandProxy(pm.proxyPath)
-	return pm, err
+	return pm
 }
 
 // SetIptablesChain sets the specified chain into portmapper
@@ -93,91 +92,99 @@ func (pm *PortMapper) SetIptablesChain(c *iptables.ChainInfo, bridgeName string)
 	pm.bridgeName = bridgeName
 }
 
-// Map maps the specified container transport address to the host's network address and transport port
-func (pm *PortMapper) Map(container net.Addr, hostIP net.IP, hostPort int) (host net.Addr, err error) {
-	return pm.MapRange(container, hostIP, hostPort, hostPort)
+// MapPorts creates port forwards for each of the passed in ports
+// TODO: This could be optimized by grouping ports for the same source/target IP's
+//   for 1 call out to iptables.
+func (pm *PortMapper) MapPorts(binds []types.PortBinding) error {
+	for i, bind := range binds {
+		hostAddr, err := pm.create(bind)
+		if err != nil {
+			return errors.Wrapf(err, "error mapping ports for %v", bind)
+		}
+
+		switch a := hostAddr.(type) {
+		case *net.TCPAddr:
+			bind.HostPort = uint16(a.Port)
+		case *net.UDPAddr:
+			bind.HostPort = uint16(a.Port)
+		default:
+			// This should be impossible to hit
+			panic("got unsupported binding type after already bound")
+		}
+		binds[i] = bind
+	}
+	return nil
 }
 
-// MapRange maps the specified container transport address to the host's network address and transport port range
-func (pm *PortMapper) MapRange(container net.Addr, hostIP net.IP, hostPortStart, hostPortEnd int) (host net.Addr, err error) {
-	pm.lock.Lock()
-	defer pm.lock.Unlock()
+func (pm *PortMapper) create(bind types.PortBinding) (host net.Addr, err error) {
+	var allocatedHostPort int
 
-	var (
-		m                 *mapping
-		proto             string
-		allocatedHostPort int
-	)
+	m := &mapping{
+		proto: bind.Proto.String(),
+	}
+	m.container, err = bind.ContainerAddr()
+	if err != nil {
+		return nil, err
+	}
+
+	for i := 0; i < maxAllocatePortAttempts; i++ {
+		allocatedHostPort, err = pm.Allocator.RequestPortInRange(bind.HostIP, m.proto, int(bind.HostPort), int(bind.HostPortEnd))
+		if err == nil {
+			break
+		}
+		if bind.HostPort != 0 && bind.HostPort == bind.HostPortEnd {
+			// No point in trying to allocate a user-requested port over and over
+			return nil, errors.Errorf("failed to allocate and map port %d", bind.HostPort)
+		}
+	}
+
+	// return early if we couldn't allocate a port
+	if err != nil {
+		return nil, err
+	}
 
 	// release the allocated port on any further error during return.
 	defer func() {
 		if err != nil {
-			pm.Allocator.ReleasePort(hostIP, proto, allocatedHostPort)
+			pm.Allocator.ReleasePort(bind.HostIP, bind.Proto.String(), allocatedHostPort)
 		}
 	}()
 
-	switch container.(type) {
-	case *net.TCPAddr:
-		proto = "tcp"
-		if allocatedHostPort, err = pm.Allocator.RequestPortInRange(hostIP, proto, hostPortStart, hostPortEnd); err != nil {
-			return nil, err
-		}
-
-		m = &mapping{
-			proto:     proto,
-			host:      &net.TCPAddr{IP: hostIP, Port: allocatedHostPort},
-			container: container,
-		}
-
-		m.userlandProxy = newProxy(pm, proto, hostIP, allocatedHostPort, container.(*net.TCPAddr).IP, container.(*net.TCPAddr).Port)
-		if err != nil {
-			return nil, err
-		}
-	case *net.UDPAddr:
-		proto = "udp"
-		if allocatedHostPort, err = pm.Allocator.RequestPortInRange(hostIP, proto, hostPortStart, hostPortEnd); err != nil {
-			return nil, err
-		}
-
-		m = &mapping{
-			proto:     proto,
-			host:      &net.UDPAddr{IP: hostIP, Port: allocatedHostPort},
-			container: container,
-		}
-		m.userlandProxy = newProxy(pm, proto, hostIP, allocatedHostPort, container.(*net.UDPAddr).IP, container.(*net.UDPAddr).Port)
+	switch bind.Proto {
+	case types.TCP:
+		m.host = &net.TCPAddr{IP: bind.HostIP, Port: allocatedHostPort}
+	case types.UDP:
+		m.host = &net.UDPAddr{IP: bind.HostIP, Port: allocatedHostPort}
 	default:
 		return nil, ErrUnknownBackendAddressType
 	}
+
+	pm.lock.Lock()
+	defer pm.lock.Unlock()
 
 	key := getKey(m.host)
 	if _, exists := pm.currentMappings[key]; exists {
 		return nil, ErrPortMappedForIP
 	}
 
-	containerIP, containerPort := getIPAndPort(m.container)
-	if hostIP.To4() != nil {
-		if err := pm.forward(iptables.Append, m.proto, hostIP, allocatedHostPort, containerIP.String(), containerPort); err != nil {
+	m.userlandProxy = newProxy(pm, m.proto, bind.HostIP, allocatedHostPort, bind.IP, int(bind.Port))
+
+	if bind.HostIP.To4() != nil {
+		containerIP, containerPort := getIPAndPort(m.container)
+		if err := pm.forward(iptables.Append, m.proto, bind.HostIP, allocatedHostPort, containerIP, containerPort); err != nil {
 			return nil, err
 		}
 	}
 
-	cleanup := func() error {
-		// need to undo the iptables rules before we return
-		m.userlandProxy.Stop()
-		if hostIP.To4() != nil {
-			pm.forward(iptables.Delete, m.proto, hostIP, allocatedHostPort, containerIP.String(), containerPort)
-			if err := pm.Allocator.ReleasePort(hostIP, m.proto, allocatedHostPort); err != nil {
-				return err
+	defer func() {
+		if err != nil {
+			if bind.HostIP.To4() != nil {
+				pm.forward(iptables.Delete, m.proto, bind.HostIP, allocatedHostPort, bind.IP, int(bind.Port))
 			}
 		}
-
-		return nil
-	}
+	}()
 
 	if err := m.userlandProxy.Start(); err != nil {
-		if err := cleanup(); err != nil {
-			return nil, fmt.Errorf("Error during port allocation cleanup: %v", err)
-		}
 		return nil, err
 	}
 
@@ -204,7 +211,7 @@ func (pm *PortMapper) Unmap(host net.Addr) error {
 
 	containerIP, containerPort := getIPAndPort(data.container)
 	hostIP, hostPort := getIPAndPort(data.host)
-	if err := pm.forward(iptables.Delete, data.proto, hostIP, hostPort, containerIP.String(), containerPort); err != nil {
+	if err := pm.forward(iptables.Delete, data.proto, hostIP, hostPort, containerIP, containerPort); err != nil {
 		logrus.Errorf("Error on iptables delete: %s", err)
 	}
 
@@ -225,7 +232,7 @@ func (pm *PortMapper) ReMapAll() {
 	for _, data := range pm.currentMappings {
 		containerIP, containerPort := getIPAndPort(data.container)
 		hostIP, hostPort := getIPAndPort(data.host)
-		if err := pm.forward(iptables.Append, data.proto, hostIP, hostPort, containerIP.String(), containerPort); err != nil {
+		if err := pm.forward(iptables.Append, data.proto, hostIP, hostPort, containerIP, containerPort); err != nil {
 			logrus.Errorf("Error on iptables add: %s", err)
 		}
 	}
@@ -251,9 +258,9 @@ func getIPAndPort(a net.Addr) (net.IP, int) {
 	return nil, 0
 }
 
-func (pm *PortMapper) forward(action iptables.Action, proto string, sourceIP net.IP, sourcePort int, containerIP string, containerPort int) error {
+func (pm *PortMapper) forward(action iptables.Action, proto string, sourceIP net.IP, sourcePort int, containerIP net.IP, containerPort int) error {
 	if pm.chain == nil {
 		return nil
 	}
-	return pm.chain.Forward(action, sourceIP, sourcePort, proto, containerIP, containerPort, pm.bridgeName)
+	return pm.chain.Forward(action, sourceIP, sourcePort, proto, containerIP.String(), containerPort, pm.bridgeName)
 }

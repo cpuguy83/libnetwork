@@ -2,7 +2,6 @@ package portmapper
 
 import (
 	"context"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
@@ -37,9 +36,9 @@ func newProxy(pm *PortMapper, proto string, frontendIP net.IP, frontendPort int,
 		frontendPort: frontendPort,
 		backendIP:    backendIP,
 		backendPort:  backendPort,
-		client:       pm.proxyCmd.client,
+		client:       pm.proxyService,
 	}
-	if !pm.enableUserlandProxy {
+	if !pm.proxyBackend {
 		m.backendIP = nil
 		m.backendPort = 0
 	}
@@ -83,16 +82,22 @@ func (m proxyMapping) Stop() error {
 	return errors.Wrap(err, "error starting proxy")
 }
 
-// proxyCommand wraps an exec.Cmd to run the userland TCP and UDP
+// ProxyCommand wraps an exec.Cmd to run the userland TCP and UDP
 // proxies as separate processes.
-type proxyCommand struct {
+type ProxyCommand struct {
 	cmd      *exec.Cmd
 	sockPath string
 	conn     *grpc.ClientConn
 	client   proxy.ProxyClient
 }
 
-func (p *proxyCommand) Run() error {
+type ProxyService interface {
+	Run() error
+	Stop() error
+	Client() proxy.ProxyClient
+}
+
+func (p *ProxyCommand) Run() error {
 	var err error
 
 	if err := p.cmd.Start(); err != nil {
@@ -111,7 +116,7 @@ func (p *proxyCommand) Run() error {
 	return nil
 }
 
-func (p *proxyCommand) Stop() error {
+func (p *ProxyCommand) Stop() error {
 	p.conn.Close()
 	if p.cmd.Process != nil {
 		if err := p.cmd.Process.Signal(os.Interrupt); err != nil {
@@ -123,16 +128,14 @@ func (p *proxyCommand) Stop() error {
 	return errors.Wrap(err, "error cleaning up docker-proxy socket")
 }
 
-func setupUserlandProxy(proxyPath string) (*proxyCommand, error) {
-	f, err := ioutil.TempFile("", "docker-proxy")
-	if err != nil {
-		return nil, errors.Wrap(err, "error creating proxy socket")
-	}
-	proxyCmd, err := newProxyCommand(proxyPath, f.Name())
-	f.Close()
+func (p *ProxyCommand) Client() proxy.ProxyClient {
+	return p.client
+}
+
+func NewProxyService(proxyPath, sockPath string) (ProxyService, error) {
+	proxyCmd, err := newProxyCommand(proxyPath, sockPath)
 	if err == nil {
 		err = proxyCmd.Run()
 	}
-
 	return proxyCmd, errors.Wrap(err, "error setting up userland proxy option")
 }

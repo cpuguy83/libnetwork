@@ -8,7 +8,7 @@ import (
 	"github.com/Sirupsen/logrus"
 )
 
-func newProxyCommand(proxyPath, sockPath string) (*proxyCommand, error) {
+func newProxyCommand(proxyPath, sockPath string) (*ProxyCommand, error) {
 	path := proxyPath
 	if proxyPath == "" {
 		cmd, err := exec.LookPath(userlandProxyCommandName)
@@ -19,7 +19,7 @@ func newProxyCommand(proxyPath, sockPath string) (*proxyCommand, error) {
 	}
 	syscall.Unlink(sockPath)
 
-	return &proxyCommand{
+	return &ProxyCommand{
 		sockPath: sockPath,
 		cmd: &exec.Cmd{
 			Path:   path,

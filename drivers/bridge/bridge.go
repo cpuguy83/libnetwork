@@ -137,6 +137,7 @@ type driver struct {
 	networks       map[string]*bridgeNetwork
 	store          datastore.DataStore
 	nlh            *netlink.Handle
+	proxyService   portmapper.ProxyService
 	sync.Mutex
 }
 
@@ -406,11 +407,24 @@ func (d *driver) configure(option map[string]interface{}) error {
 		}
 	}
 
+	// TODO: put this in /run/docker
+	f, err := ioutil.TempFile("", "docker-proxy")
+	if err != nil {
+		return errors.Wrap(err, "error creating proxy service socket")
+	}
+	f.Close()
+
+	proxyService, err := portmapper.NewProxyService(d.config.UserlandProxyPath, f.Name())
+	if err != nil {
+		return err
+	}
+
 	d.Lock()
 	d.natChain = natChain
 	d.filterChain = filterChain
 	d.isolationChain = isolationChain
 	d.config = config
+	d.proxyService = proxyService
 	d.Unlock()
 
 	err = d.initStore(option)
@@ -642,18 +656,11 @@ func (d *driver) createNetwork(config *networkConfiguration) error {
 		}
 	}
 
-	// Create and set network handler in driver
-	var pmOpts []portmapper.CreateOption
+	pm := portmapper.New(
+		portmapper.WithFullProxy(d.config.EnableUserlandProxy),
+		portmapper.WithProxyService(d.proxyService.Client()),
+	)
 
-	pmOpts = append(pmOpts, portmapper.WithProxyPath(d.config.UserlandProxyPath))
-	if d.config.EnableUserlandProxy {
-		pmOpts = append(pmOpts, portmapper.WithFullProxy)
-	}
-
-	pm, err := portmapper.New(pmOpts...)
-	if err != nil {
-		return errors.Wrap(err, "error creating portmapper")
-	}
 	network := &bridgeNetwork{
 		id:         config.ID,
 		endpoints:  make(map[string]*bridgeEndpoint),
