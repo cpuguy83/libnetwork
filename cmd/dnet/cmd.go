@@ -9,7 +9,7 @@ import (
 	"os"
 
 	"github.com/codegangsta/cli"
-	"github.com/docker/docker/pkg/term"
+	"github.com/moby/moby/pkg/term"
 	"github.com/docker/libnetwork/client"
 )
 

@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/pkg/stringid"
 	"github.com/docker/libnetwork/common"
 	"github.com/docker/libnetwork/config"
 	"github.com/docker/libnetwork/datastore"

@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/docker/docker/pkg/ioutils"
+	"github.com/moby/moby/pkg/ioutils"
 	_ "github.com/docker/libnetwork/testutils"
 	"github.com/docker/libnetwork/types"
 )

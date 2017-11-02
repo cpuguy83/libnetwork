@@ -10,8 +10,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/docker/docker/pkg/plugins"
-	"github.com/docker/docker/pkg/reexec"
+	"github.com/moby/moby/pkg/plugins"
+	"github.com/moby/moby/pkg/reexec"
 	"github.com/docker/libnetwork"
 	"github.com/docker/libnetwork/config"
 	"github.com/docker/libnetwork/datastore"

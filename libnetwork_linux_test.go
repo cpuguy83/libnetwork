@@ -14,7 +14,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/pkg/reexec"
+	"github.com/moby/moby/pkg/reexec"
 	"github.com/docker/libnetwork"
 	"github.com/docker/libnetwork/ipamapi"
 	"github.com/docker/libnetwork/netlabel"
@@ -521,14 +521,11 @@ func externalKeyTest(t *testing.T, reexec bool) {
 }
 
 func reexecSetKey(key string, containerID string, controllerID string) error {
-	var (
-		state libcontainer.State
-		b     []byte
-		err   error
-	)
+	var state struct {
+		NamespacePaths map[configs.NamespaceType]string
+	}
 
-	state.NamespacePaths = make(map[configs.NamespaceType]string)
-	state.NamespacePaths[configs.NamespaceType("NEWNET")] = key
+	state.NamespacePaths = map[configs.NamespaceType]string {configs.NamespaceType("NEWNET"): key}
 	if b, err = json.Marshal(state); err != nil {
 		return err
 	}

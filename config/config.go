@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
-	"github.com/docker/docker/pkg/discovery"
-	"github.com/docker/docker/pkg/plugingetter"
+	"github.com/moby/moby/pkg/discovery"
+	"github.com/moby/moby/pkg/plugingetter"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/docker/libkv/store"
 	"github.com/docker/libnetwork/cluster"

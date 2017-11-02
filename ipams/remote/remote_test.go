@@ -11,7 +11,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/docker/docker/pkg/plugins"
+	"github.com/moby/moby/pkg/plugins"
 	"github.com/docker/libnetwork/ipamapi"
 	_ "github.com/docker/libnetwork/testutils"
 )

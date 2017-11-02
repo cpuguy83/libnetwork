@@ -9,8 +9,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/docker/docker/opts"
-	"github.com/docker/docker/pkg/stringid"
+	"github.com/moby/moby/opts"
+	"github.com/moby/moby/pkg/stringid"
 	flag "github.com/docker/libnetwork/client/mflag"
 	"github.com/docker/libnetwork/netutils"
 )
