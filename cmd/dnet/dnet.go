@@ -18,12 +18,10 @@ import (
 
 	"github.com/BurntSushi/toml"
 	"github.com/codegangsta/cli"
-	"github.com/docker/docker/opts"
-	"github.com/docker/docker/pkg/discovery"
-	"github.com/docker/docker/pkg/reexec"
+	"github.com/moby/moby/opts"
+	"github.com/moby/moby/pkg/discovery"
+	"github.com/moby/moby/pkg/reexec"
 
-	"github.com/docker/docker/api/types/network"
-	"github.com/docker/docker/pkg/term"
 	"github.com/docker/libnetwork"
 	"github.com/docker/libnetwork/api"
 	"github.com/docker/libnetwork/cluster"
@@ -35,6 +33,8 @@ import (
 	"github.com/docker/libnetwork/options"
 	"github.com/docker/libnetwork/types"
 	"github.com/gorilla/mux"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/pkg/term"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 )

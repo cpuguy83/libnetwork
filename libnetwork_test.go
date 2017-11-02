@@ -10,8 +10,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/docker/docker/pkg/plugins"
-	"github.com/docker/docker/pkg/reexec"
 	"github.com/docker/libnetwork"
 	"github.com/docker/libnetwork/config"
 	"github.com/docker/libnetwork/datastore"
@@ -21,6 +19,8 @@ import (
 	"github.com/docker/libnetwork/options"
 	"github.com/docker/libnetwork/testutils"
 	"github.com/docker/libnetwork/types"
+	"github.com/moby/moby/pkg/plugins"
+	"github.com/moby/moby/pkg/reexec"
 	"github.com/sirupsen/logrus"
 	"github.com/vishvananda/netns"
 )

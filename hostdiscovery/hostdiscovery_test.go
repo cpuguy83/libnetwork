@@ -7,7 +7,7 @@ import (
 	mapset "github.com/deckarep/golang-set"
 	_ "github.com/docker/libnetwork/testutils"
 
-	"github.com/docker/docker/pkg/discovery"
+	"github.com/moby/moby/pkg/discovery"
 )
 
 func TestDiff(t *testing.T) {

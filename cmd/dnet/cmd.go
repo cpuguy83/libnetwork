@@ -9,8 +9,8 @@ import (
 	"os"
 
 	"github.com/codegangsta/cli"
-	"github.com/docker/docker/pkg/term"
 	"github.com/docker/libnetwork/client"
+	"github.com/moby/moby/pkg/term"
 )
 
 var (

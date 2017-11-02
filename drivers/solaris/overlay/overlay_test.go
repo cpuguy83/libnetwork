@@ -7,13 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/pkg/plugingetter"
 	"github.com/docker/libkv/store/consul"
 	"github.com/docker/libnetwork/datastore"
 	"github.com/docker/libnetwork/discoverapi"
 	"github.com/docker/libnetwork/driverapi"
 	"github.com/docker/libnetwork/netlabel"
 	_ "github.com/docker/libnetwork/testutils"
+	"github.com/moby/moby/pkg/plugingetter"
 )
 
 func init() {

@@ -13,12 +13,12 @@ import (
 	"os"
 	"testing"
 
-	"github.com/docker/docker/pkg/plugins"
 	"github.com/docker/libnetwork/datastore"
 	"github.com/docker/libnetwork/discoverapi"
 	"github.com/docker/libnetwork/driverapi"
 	_ "github.com/docker/libnetwork/testutils"
 	"github.com/docker/libnetwork/types"
+	"github.com/moby/moby/pkg/plugins"
 )
 
 func decodeToMap(r *http.Request) (res map[string]interface{}, err error) {
